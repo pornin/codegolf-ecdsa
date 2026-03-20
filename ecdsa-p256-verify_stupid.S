@@ -427,9 +427,9 @@ invert_mod:
 	_LD _M ; _SUB _ONE ; _SUB _ONE ; _ST _T1
 	# Set accumulator to 1.
 	_LD _ONE
-	# Start iterator and consume first iteration
+	# Start iterator
 	_FOR
-	# Square current value (except on first iteration)
+	# Square current value
 	_MUL 0
 	# If current bit is 1, multiply accumulator by operand
 	_SKIPBITZ _T1 ; _MUL _T0
