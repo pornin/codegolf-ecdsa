@@ -89,11 +89,10 @@ Ldecode_int__loop2:
 	.size	decode_int, . - decode_int
 
 # Curve constants, in that order:
-#   Gx           curve generator point, X coordinate
-#   Gy           curve generator point, Y coordinate
-#   b            curve parameter b
-#   mod_scalar   modulus n (scalar field)
-#   mod_coord    modulus p (coordinate field)
+#   Gx       curve generator point, X coordinate
+#   Gy       curve generator point, Y coordinate
+#   mod_N    modulus n (scalar field)
+#   mod_P    modulus p (coordinate field)
 # All values use unsigned LITTLE-ENDIAN encoding (32 bytes per value).
 # WARNING: values MUST NOT be separated or reordered.
 # WARNING: the bytecode must follow immediately after the curve constants.
@@ -104,9 +103,6 @@ curve_constants:
 	# Gy
 	.quad	0xCBB6406837BF51F5, 0x2BCE33576B315ECE
 	.quad	0x8EE7EB4A7C0F9E16, 0x4FE342E2FE1A7F9B
-	# b
-	.quad	0x3BCE3C3E27D2604B, 0x651D06B0CC53B0F6
-	.quad	0xB3EBBD55769886BC, 0x5AC635D8AA3A93E7
 mod_N:
 	.quad	0xF3B9CAC2FC632551, 0xBCE6FAADA7179E84
 	.quad	0xFFFFFFFFFFFFFFFF, 0xFFFFFFFF00000000
@@ -236,9 +232,9 @@ mod_P:
 	.equ	_F1,    2    # reserved for MUL
 	.equ	_ZERO, 27    # constant zero
 	.equ	_ONE,  28    # constant one
-	.equ	_Gx,   29    # constant Gx (x coordinate of generator)
-	.equ	_Gy,   30    # constant Gy (y coordinate of generator)
-	.equ	_B,    31    # constant b (curve parameter)
+	.equ	_B,    29    # constant b (curve parameter)
+	.equ	_Gx,   30    # constant Gx (x coordinate of generator)
+	.equ	_Gy,   31    # constant Gy (y coordinate of generator)
 	.equ	_T0,   16    # temporary 0
 	.equ	_T1,   17    # temporary 1
 	.equ	_T2,   18    # temporary 2
@@ -356,6 +352,11 @@ mod_P:
 
 	# We have u and v; we now switch to modulus p for curve computations.
 	_MODP
+
+	# Compute curve constant B from the generator point.
+	_LD _Gx ; _MUL _Gx ; _MUL _Gx
+	_SUB _Gx ; _SUB _Gx ; _SUB _Gx ; _ST _T4
+	_LD _Gy ; _MUL _Gy ; _SUB _T4 ; _ST _B
 
 	# Check that the point in (Qx,Qy) is a valid curve point.
 	_CALL check_point
@@ -914,18 +915,18 @@ op_fail:
 	# (slot 1 is "virtual" and contains the flag), and an extra 64 byts
 	# for mod_N and mod_P (each of size 32 bytes).
 
-	# Reserve space for Gx, Gy, Bm, mod_N and mod_P.
+	# Reserve space for Gx, Gy, mod_N and mod_P.
 	# The 'enter' opcode here is equivalent to:
 	#   pushq  %rbp
 	#   movq   %rsp, %rbp
-	#   subq   $160, %rsp
-	enter	$160, $0
+	#   subq   $128, %rsp
+	enter	$128, $0
 
 	# Copy constants to stack slots (Gx, Gy, b) followed by
 	# mod_N and mod_P.
 	movq	%rsp, %rdi
 	xorl	%ecx, %ecx
-	movb	$160, %cl
+	movb	$128, %cl
 	rep movsb
 
 	# Now rsi points to the bytecode entry point (it immediately
@@ -933,7 +934,7 @@ op_fail:
 	# Clear space for values 28 to 2, and the flags, except the slots
 	# for the saved stack pointer and the current modulus.
 	xorl	%eax, %eax
-	movb	$110, %cl    # 111 = 28*4 - 2
+	movb	$114, %cl    # 111 = 29*4 - 1
 1:
 	pushq	%rax
 	loop	1b
@@ -1323,6 +1324,12 @@ tv_point_decode:
 	leaq	mod_P(%rip), %rax
 	movq	%rax, 32(%rbp)
 
+	# Fill B constant (since normal preamble does not run).
+	leaq	(_B*32)(%rbp), %rdi
+	leaq	gf_B(%rip), %rsi
+	movb	$32, %cl
+	rep movsb
+
 	# We mimick a _CALL to the check_point routine, and set back
 	# the return address to a _OK.
 	leaq	bytecode_ok(%rip), %rax
@@ -1459,6 +1466,12 @@ point_addto:
 	leaq	mod_P(%rip), %rax
 	movq	%rax, 32(%rbp)
 
+	# Fill B constant (since normal preamble does not run).
+	leaq	(_B*32)(%rbp), %rdi
+	leaq	gf_B(%rip), %rsi
+	movb	$32, %cl
+	rep movsb
+
 	# We mimick a _CALL to the point_add_to_W routine, and set back
 	# the return address to a _OK.
 	leaq	bytecode_ok(%rip), %rax
@@ -1542,6 +1555,10 @@ tv_point_sub:
 	.align	8
 gf_ZERO:
 	.quad	0, 0, 0, 0
+gf_B:
+	.quad	0x3BCE3C3E27D2604B, 0x651D06B0CC53B0F6
+	.quad	0xB3EBBD55769886BC, 0x5AC635D8AA3A93E7
+
 
 # ========================================================================
 #endif
