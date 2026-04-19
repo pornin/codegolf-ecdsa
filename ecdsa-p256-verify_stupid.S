@@ -539,12 +539,10 @@ point_add_to_W:
 # storage space of value 1 is reused for some values collectively called
 # "the flags":
 #
-#    rbp+32    current modulus pointer (8 bytes)
-#    rbp+40    saved original stack pointer (8 bytes)
-#    rbp+48    exit flag (1 = exit reached, 0 = not done yet) (1 byte)
-#    rbp+49    status flag (0 = err, 1 = success) (1 byte)
+#    rbp+32    saved original stack pointer (8 bytes)
+#    rbp+40    unused (24 bytes)
 #
-# The emulated carry flag is in r8b and loop state are stored in registers
+# The emulated carry flag is in r8b and loop state is stored in registers
 # r8..r12.
 #
 # Instruction decoding uses first the translation_table (below), which
@@ -634,8 +632,8 @@ Lz256_sub__loop:
 #  - r8b contains the carry from the last addition or subtraction
 #    (1 = carry set, 0 = carry clear); it must be preserved by all other
 #    opcodes
-#  - r9d contains the current loop counter, and r10 the loop start address
-#  - r11d and r12 contain the saved loop counter and start address
+#  - r9b contains the current loop counter, and r10 the loop start address
+#  - r11b and r12 contain the saved loop counter and start address
 #    (for nested loops)
 #  - CPU carry flag (CF) is cleared
 # The stack is used for subroutine calls: appart from the native return
@@ -645,22 +643,20 @@ Lz256_sub__loop:
 # LD x    copy value x into accumulator
 op_ld:
 	pushq	%rdx
-	popq	%rsi
 	pushq	%rbp
-	popq	%rdi
-# docopy is a shareable routine that copies 40 bytes from rsi to rdi
-# (assumption: bits 8..63 of rcx are zero).
+# docopy is a shareable routine that copies 32 bytes (source and destination
+# pointers are on the stack). Assumption: bits 8..63 of rcx are zero.
 docopy:
+	popq	%rdi
+	popq	%rsi
 	movb	$32, %cl
 	rep movsb
 	ret
 
 # ST x    copy accumulator into value x
 op_st:
-	pushq	%rdx
-	popq	%rdi
 	pushq	%rbp
-	popq	%rsi
+	pushq	%rdx
 	jmp	docopy
 
 # SUB x   subtract value x from accumulator
@@ -695,7 +691,7 @@ Lop_add__cont1:
 	jnc	Lop_add__cont2
 	# Subtract modulus until a borrow is obtained (to counteract the carry).
 Lop_add__loop:
-	movq	32(%rbp), %rsi   # modulus
+	movq	%r13, %rsi # modulus
 	callq	*%rdi      # call secondary function
 	jnc	Lop_add__loop
 Lop_add__cont2:
@@ -705,8 +701,7 @@ Lop_add__cont2:
 op_smod:
 	# &mod_N == rbp+1024
 	# &mod_P == rbp+1056 == &mod_N + 32
-	addq	$64, %rdx
-	movq	%rdx, 32(%rbp)
+	leaq	64(%rdx), %r13
 	ret
 
 # MUL x   multiply accumulator with x
@@ -729,7 +724,8 @@ op_mul:
 # The "current bit" relates to the iterator; this instruction makes sense
 # only when an iteration is ongoing.
 op_skipbitz:
-	btl	%r9d, (%rdx)      # test bit value
+	movb	%r9b, %cl         # ecx[8..31] are already zero
+	btl	%ecx, (%rdx)      # test bit value
 	jc	Lret1
 	# FALL THROUGH
 # Common sequence for skipping the next instruction. This assumes that
@@ -876,13 +872,12 @@ Lop_next__cont2:
 # OK     exit the interpreter with a success status
 op_ok:
 	# Set the success flag
-	movb	$1, 49(%rbp)
+	movb	$1, %ch
 	# FALL THROUGH
 # FAIL   exit the interpreter with a failed status
 op_fail:
 	# Set the exit flag
-	# Status is 0 by default, only OK sets it to 1.
-	movb	$1, 48(%rbp)
+	xorl	%ebx, %ebx
 	ret
 
 # Interpreter is built as three macros, so that the test code may use
@@ -901,6 +896,7 @@ op_fail:
 .macro	INTERPRETER_BEGIN
 	pushq	%rbx
 	pushq	%r12
+	pushq	%r13
 	leaq	decode_int(%rip), %rbx
 
 	# WARNING: value "15" is the size of the decode_int() function. This
@@ -922,31 +918,28 @@ op_fail:
 	#   subq   $128, %rsp
 	enter	$128, $0
 
-	# Copy constants to stack slots (Gx, Gy, b) followed by
+	# Copy constants to stack slots (Gx, Gy) followed by
 	# mod_N and mod_P.
 	movq	%rsp, %rdi
 	xorl	%ecx, %ecx
 	movb	$128, %cl
 	rep movsb
+	leaq	-64(%rdi), %r13   # pointer to mod_N
 
 	# Now rsi points to the bytecode entry point (it immediately
 	# follows the constants block).
-	# Clear space for values 28 to 2, and the flags, except the slots
-	# for the saved stack pointer and the current modulus.
+	# Clear space for values 28 to 2, and the flags, except the slot
+	# for the saved stack pointer.
 	xorl	%eax, %eax
-	movb	$114, %cl    # 111 = 29*4 - 1
+	movb	$115, %cl    # 115 = 29*4 - 1
 1:
 	pushq	%rax
 	loop	1b
-	# Push saved stack pointer.
-	pushq	%rbp
-	# Push pointer to current modulus (initially mod_N).
-	subq	$64, %rbp
-	pushq	%rbp
-	# Value 28 is ONE.
-	movb	$1, -128(%rbp)
-	# Allocate space for the accumulator (uninitialized).
-	subq	$32, %rsp
+	# Value 28 is ONE; we locate it relatively to mod_N, whose address
+	# is in r13.
+	movb	$1, -128(%r13)
+	# Push saved stack pointer then allocate 32 bytes for the accumulator.
+	enter	$32, $0
 	movq	%rsp, %rbp
 .endm
 
@@ -962,7 +955,6 @@ op_fail:
 .macro	INTERPRETER_MAIN
 	# Set rbx to point to the translation table.
 	leaq	translation_table(%rip), %rbx
-	xorl	%r9d, %r9d
 1:
 	# Load next instruction.
 	xorl	%eax, %eax
@@ -974,26 +966,23 @@ op_fail:
 	#  - set rdx to rbp + 32*x
 	movl	%eax, %ecx    # this also clears all high bits of rcx
 	andb	$0x07, %al    # al <- t
-	xorb	%al, %cl      # cl <- 8*x
 	xlatb
-	leaq	(%rbp,%rcx,4), %rdx   # rdx <- rbp + 32*x
 	shrl	$3, %ecx      # cl <- x
+	imull	$32, %ecx, %edx
+	addq	%rbp, %rdx    # rdx <- rbp + 32*x
 	# If x = 1, target value is the modulus (pointer to the current
 	# modulus is at the start of the flag area, which is pointed to
 	# by rdx in that case).
 	cmp	$1, %cl
-	jne	2f
-	movq	(%rdx), %rdx
-2:
+	cmove	%r13, %rdx
 	addq	%rbx, %rax    # rax <- translated address (also clears CF)
-
 	# Call the opcode routine
 	pushq	%rsi
 	callq	*%rax
 	popq	%rsi
 	# Execute next instruction until the exit flag is set
-	cmpb	$0, 48(%rbp)
-	je	1b
+	testq	%rbx, %rbx
+	jnz	1b
 .endm
 
 # Wind down the interpreter. The stack, rbx and rbp are restored to the
@@ -1002,13 +991,10 @@ op_fail:
 # Output: rax
 # Clobbers: rbp
 .macro	INTERPRETER_END
-	# Retrieve exit status.
-	xorl	%eax, %eax
-	movb	49(%rbp), %al
-
 	# Restore stack and saved registers.
-	movq	40(%rbp), %rsp
+	movq	32(%rbp), %rsp
 	popq	%rbp
+	popq	%r13
 	popq	%r12
 	popq	%rbx
 .endm
@@ -1074,7 +1060,8 @@ tv_ecdsa_p256_verify:
 	INTERPRETER_MAIN
 
 	INTERPRETER_END
-	# %eax was set according to the bytecode exit status
+	xorl	%eax, %eax
+	movb	%ch, %al
 	ret
 	.size	tv_ecdsa_p256_verify, . - tv_ecdsa_p256_verify
 
@@ -1174,11 +1161,10 @@ Lgf_op__cont1:
 Lgf_op__cont2:
 	# Set modulus according to the 'scalar' argument.
 	movl	-32(%r15), %eax
-	leaq	mod_P(%rip), %rcx
+	leaq	mod_P(%rip), %r13
 	leaq	mod_N(%rip), %rdx
 	testl	%eax, %eax
-	cmovnz	%rdx, %rcx
-	movq	%rcx, 32(%rbp)
+	cmovnz	%rdx, %r13
 
 	# Simulate a call, with a return pointer leading to bytecode_ok,
 	# then use the provided code pointer.
@@ -1321,8 +1307,7 @@ tv_point_decode:
 	callq	*%rbx
 
 	# Set modulus to mod_P
-	leaq	mod_P(%rip), %rax
-	movq	%rax, 32(%rbp)
+	leaq	mod_P(%rip), %r13
 
 	# Fill B constant (since normal preamble does not run).
 	leaq	(_B*32)(%rbp), %rdi
@@ -1336,6 +1321,7 @@ tv_point_decode:
 	pushq	%rax
 	leaq	check_point(%rip), %rsi
 	INTERPRETER_MAIN
+	pushq	%rcx
 
 	# Copy decoded x and y to destination P.X and P.Y; set P.Z to 1.
 	movq	%r15, %rdi
@@ -1351,7 +1337,10 @@ tv_point_decode:
 	stosq
 	stosq
 
+	popq	%rcx
 	INTERPRETER_END
+	xorl	%eax, %eax
+	movb	%ch, %al
 	popq	%r15
 	popq	%r14
 	ret
@@ -1463,8 +1452,7 @@ point_addto:
 	rep movsb
 
 	# Set modulus to mod_P.
-	leaq	mod_P(%rip), %rax
-	movq	%rax, 32(%rbp)
+	leaq	mod_P(%rip), %r13
 
 	# Fill B constant (since normal preamble does not run).
 	leaq	(_B*32)(%rbp), %rdi

@@ -9,9 +9,9 @@ firmware in Flash memory before executing it), though this specific
 implementation is stupidly slow and thus should probably not be
 used at all. This is more an artistic statement.
 
-**Achieved size: 745 bytes**
+**Achieved size: 732 bytes**
 
-**Speed:** about 270 million clock cycles on an Intel i5-8259U (a
+**Speed:** about 255 million clock cycles on an Intel i5-8259U (a
 "Coffee Lake" core, very similar to Skylake); note that this value can
 vary by up to 15 millions depending on code alignment, which depends on
 what this implementation is linked with. This speed is about a thousand
