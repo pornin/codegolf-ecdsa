@@ -48,7 +48,7 @@ for x86 systems in 64-bit mode, and complies with the SysV EABI as
 used in, for instance, Linux systems. It is written using the "AT&T"
 syntax. The file name ends with an uppercase `.S`, meaning that it expects
 to be preprocessed with the C preprocessor; this is used to enable
-some unit test framework (if compiled with `-DTV_ECDSA_P256_TEST`.
+some unit test framework (if compiled with `-DTV_ECDSA_P256_TEST`).
 
 To compile type `make`; this generates a test program that exercises 492
 test vectors from the [Wycheproof
